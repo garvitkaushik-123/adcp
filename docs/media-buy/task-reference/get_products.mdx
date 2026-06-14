@@ -137,6 +137,7 @@ asyncio.run(discover_with_filters())
 | `brand` | BrandRef | No | Brand reference (domain + optional brand_id). Resolved to full identity at execution time. |
 | `account` | AccountRef | No | Account reference for account-specific pricing. Returns products with pricing from this account's rate card. |
 | `catalog` | [Catalog](/docs/creative/catalogs) | No | Catalog of items the buyer wants to promote. The seller matches catalog items against its inventory and returns products where matches exist. Requires `brand`. See [Catalog discovery](#catalog-discovery) below. |
+| `opportunity` | OpportunityContext | No | Buyer-supplied planning-cycle context for connecting related briefs, refinements, proposals, declines, and buys. Meaningful for `"brief"` and `"refine"` requests; sellers ignore it for `"wholesale"` feed reads. See [Opportunity context](#opportunity-context) below. |
 | `filters` | Filters | No | Structured filters (see below) |
 | `fields` | string[] | No | Specific product fields to include in the response for lightweight discovery. When requesting signal metadata, buyers SHOULD request `included_signals` for non-selectable bundled/planned signals, and `signal_targeting_allowed`, `signal_targeting_options`, and `signal_targeting_rules` for package-level signal selection. |
 | `property_list` | PropertyListRef | No | [AdCP 3.0] Reference to a property list for filtering. See [Property Lists](/docs/governance/property/tasks/property_lists) |
@@ -158,6 +159,52 @@ To use property list filtering:
 
 The seller must declare `features.property_list_filtering: true` in [`get_adcp_capabilities`](/docs/protocol/get_adcp_capabilities) to support this filter. See the [Property Governance overview](/docs/governance/property/index) for the full workflow.
 </Note>
+
+### Opportunity context
+
+`opportunity` lets a buyer identify the planning cycle behind a request. A buyer might run several experimental briefs for the same Nova Soda Q3 planning cycle, refine multiple proposal variants, decline individual proposal versions, and eventually execute a media buy. The same `opportunity_id` connects those calls without turning any one call into a commitment.
+
+Use `opportunity` for curated discovery (`buying_mode: "brief"`) and proposal iteration (`buying_mode: "refine"`). Sellers ignore it for `buying_mode: "wholesale"` because wholesale requests are feed reads, not curated pre-buy interactions.
+
+```json
+{
+  "$schema": "/schemas/media-buy/get-products-request.json",
+  "buying_mode": "brief",
+  "brief": "Nova Soda Q3 campaign ideas for Gen Z summer moments",
+  "brand": {
+    "domain": "novasoda.example"
+  },
+  "opportunity": {
+    "opportunity_id": "opp_01HX7W8S3Q9K2M4N6P0R5T1V",
+    "phase": "exploratory",
+    "planning_horizon": {
+      "start": "2026-07-01",
+      "end": "2026-09-30"
+    },
+    "response_deadline": "2026-06-30T21:00:00Z"
+  }
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `opportunity_id` | string | Yes | Opaque buyer-assigned identifier for this planning cycle with this seller. Stable across related `get_products`, proposal decline, and `create_media_buy` calls. Do not embed advertiser names, campaign names, audience names, budget references, competitor names, internal authorization IDs, globally correlatable values, personal data, or confidential campaign identifiers. |
+| `phase` | string | No | `"exploratory"`: early market scan or option gathering. `"planning"`: a concrete opportunity is being planned, but the buyer is not yet actively requesting seller proposals. `"active_sourcing"`: the buyer is actively requesting seller responses or proposals, but has not requested proposal finalization, an inventory hold, or a committed media buy. |
+| `status` | string | No | `"open"` or `"closed"`. Use `"closed"` when the buyer is no longer pursuing this planning cycle with the seller. |
+| `close_reason` | string | Conditional | Optional when `status` is `"closed"`: `accepted_with_seller`, `purchased_elsewhere`, `selected_alternative`, `not_pursued`, `budget_changed`, `timing_changed`, or `other`. Not valid unless `status` is `"closed"`. |
+| `close_detail` | string | Conditional | Optional short, non-identifying explanation when `status` is `"closed"`. Not valid unless `status` is `"closed"`. |
+| `planning_horizon` | DateRange | No | Advisory planning or campaign window for the opportunity, using inclusive ISO 8601 `start` and `end` dates (`YYYY-MM-DD`). |
+| `response_deadline` | string | No | ISO 8601 date-time by which the buyer would like a seller response or proposal update. |
+
+`opportunity_id` is not an idempotency key. It spans many calls. `idempotency_key` identifies one mutating request attempt. `proposal_id` + `proposal_version` identifies one seller offer state. Opportunity closure is broader than proposal decline: `opportunity.status: "closed"` says the planning cycle is done, while proposal-scoped `action: "decline"` says the buyer is not pursuing one exact proposal version.
+
+To close an opportunity without buying, send `buying_mode: "refine"` with the same `opportunity_id`, `opportunity.status: "closed"`, an optional `close_reason` / `close_detail`, and a request-level refine entry such as `{ "scope": "request", "ask": "Close this opportunity; no further proposals requested." }`. Sellers that persist opportunity state SHOULD record this buyer-reported closure. This does not replace proposal-level acknowledgement: decline each evaluated proposal version separately when the buyer needs the seller to acknowledge that exact proposal outcome.
+
+When closing because the buyer accepted this seller's offer, carry the same `opportunity_id` into `create_media_buy`. If that create request marks the opportunity closed, `close_reason` MUST be `accepted_with_seller`.
+
+Sellers MAY use `opportunity` for queueing, SLA expectations, async routing, human-review prioritization, CRM or pipeline labels, and aggregate win-rate analytics. Sellers MUST NOT use `opportunity` to alter price, rate card, product eligibility, inventory availability, or buyability. Opportunity closure is buyer-reported advisory state; it has no dedicated protocol acknowledgement surface beyond the ordinary task response in this version. `response_deadline` does not require or authorize firm pricing, inventory availability confirmation, inventory hold, proposal finalization, or buyer/seller commitment.
+
+If `opportunity` is absent, sellers MUST treat the opportunity context as unknown. Absence MUST NOT reduce response quality, product availability, or pricing fairness.
 
 ### Filters Object
 
@@ -300,8 +347,11 @@ Each entry is a discriminated union on `scope`:
 |-------|------|----------|-------------|
 | `scope` | string | Yes | `"proposal"` |
 | `proposal_id` | string | Yes | Proposal ID from a previous `get_products` response |
-| `action` | string | No | `"include"` (default): return with updated allocations and pricing. `"omit"`: exclude from the response. `"finalize"`: request firm pricing and inventory hold (transitions a draft proposal to committed). When omitted, the seller treats the entry as `"include"`. |
-| `ask` | string | No | What the buyer is asking for (e.g., `"shift more budget toward video"`, `"reduce total by 10%"`). Ignored when `action` is `"omit"`. |
+| `proposal_version` | string | Conditional | Opaque version from the proposal being acted on. Required when `action` is `"decline"`. Buyers SHOULD include it for other proposal actions when the proposal carried `proposal_version`. |
+| `action` | string | No | `"include"` (default): return with updated allocations and pricing. `"omit"`: exclude from the response without marking a terminal outcome. `"finalize"`: request firm pricing and inventory hold (transitions a draft proposal to committed). `"decline"`: terminal not-pursued outcome for this `proposal_id` + `proposal_version`; requires `reason`. When omitted, the seller treats the entry as `"include"`. |
+| `reason` | string | Conditional | Machine-readable reason for `action: "decline"`: `price`, `inventory_fit`, `audience_fit`, `creative_unsupported`, `measurement_unsupported`, `policy`, `timing`, `budget_changed`, `selected_alternative`, or `other`. Required for decline. |
+| `detail` | string | Conditional | Optional short, non-identifying explanation for `action: "decline"`. Required when `reason` is `"other"`. Must not include competitor identity or sensitive campaign information. |
+| `ask` | string | No | What the buyer is asking for (e.g., `"shift more budget toward video"`, `"reduce total by 10%"`). Ignored when `action` is `"omit"` or `"decline"`. |
 
 ### refinement_applied (response)
 
@@ -312,6 +362,7 @@ When the seller receives a `refine` array, the response includes `refinement_app
 | `scope` | string | Yes | Echoes the scope (`"request"` / `"product"` / `"proposal"`) from the corresponding `refine` entry. |
 | `product_id` | string | Yes when `scope` is `"product"` | Echoes `product_id` from the corresponding refine entry. |
 | `proposal_id` | string | Yes when `scope` is `"proposal"` | Echoes `proposal_id` from the corresponding refine entry. |
+| `proposal_version` | string | Conditional | Echoes `proposal_version` from the corresponding proposal refine entry when supplied. Required when acknowledging `action: "decline"`. |
 | `status` | string | Yes | `"applied"`: ask fulfilled. `"partial"`: partially fulfilled. `"unable"`: could not fulfill. |
 | `notes` | string | No | Seller explanation. Recommended when status is `"partial"` or `"unable"`. |
 
@@ -369,6 +420,7 @@ Publishers may return proposals alongside products - structured media plans with
 | Field | Type | Description |
 |-------|------|-------------|
 | `proposal_id` | string | Unique identifier for finalizing this proposal and, once committed, executing it via `create_media_buy` |
+| `proposal_version` | string | Opaque seller-assigned version for the proposal's current offer state. Changes when execution-relevant terms change. Buyers include this when declining a proposal and MUST include it when executing a versioned proposal. |
 | `proposal_status` | string | Lifecycle state. `draft` means the proposal must be finalized via `get_products` refine action `finalize` before create. `committed` means the proposal can be executed via `create_media_buy` before `expires_at`. When absent, treat the proposal as ready to buy for backward compatibility. |
 | `name` | string | Human-readable name for the media plan |
 | `allocations` | ProductAllocation[] | Budget allocations across products (percentages must sum to 100). Each allocation may include optional `start_time` and `end_time` for per-flight scheduling. |
@@ -1158,10 +1210,32 @@ Minimal example:
 }
 ```
 
+Decline example:
+
+```json test=false
+{
+  "buying_mode": "refine",
+  "refine": [
+    {
+      "scope": "proposal",
+      "proposal_id": "prop_awareness_q2",
+      "proposal_version": "4",
+      "action": "decline",
+      "reason": "price",
+      "detail": "Above target CPM range"
+    }
+  ]
+}
+```
+
 Key rules to know before sending:
 
 - **`refine` is only valid in `refine` mode.** Requests that include this field in `brief` or `wholesale` mode are rejected with `INVALID_REQUEST`.
 - **Filters are absolute**, not deltas. Always send the full filter set you want applied.
+- **`omit` is not terminal.** It excludes a proposal from the next response but does not report a final evaluation outcome.
+- **`decline` is terminal for a proposal version.** Proposal-scoped `action: "decline"` requires `proposal_version` and `reason`. After a seller acknowledges it with `refinement_applied[].status: "applied"`, the buyer MUST NOT execute the same `proposal_id` + `proposal_version` with `create_media_buy`; sellers reject such attempts with `INVALID_STATE`.
+- **Unversioned proposals cannot be declined.** Sellers that support proposal decline MUST include `proposal_version` on proposals they expect buyers to decline. Buyers MUST NOT send `action: "decline"` for unversioned proposals; use `omit`, ignore the proposal, or re-run discovery/refinement to obtain a versioned proposal.
+- **Keep decline feedback non-identifying.** Use `reason` for aggregate seller feedback. Keep `detail` short and do not include competing seller/platform/product names, clearing prices, bid strategy, confidential audience definitions, budget reallocations, campaign IDs, or NDA-scoped terms.
 - **Proposals are actionable through status.** `proposal_status: "draft"` requires finalization before create; `proposal_status: "committed"` can be executed with `create_media_buy(proposal_id)` before `expires_at`; absent status is legacy ready-to-buy.
 - **Proposals are ephemeral.** Proposals typically include an `expires_at` timestamp. After expiration, the seller returns `PROPOSAL_EXPIRED`.
 - **Product IDs are stable catalog identifiers.** Custom products (`is_custom: true`) may have an `expires_at` timestamp, after which refinement returns `PRODUCT_NOT_FOUND`.
@@ -1177,6 +1251,7 @@ Key rules to know before sending:
 | `PROPOSAL_EXPIRED` | A referenced proposal ID has passed its `expires_at` timestamp | Re-discover with a new `brief` or `wholesale` request |
 | `PROPOSAL_NOT_FOUND` | The referenced `proposal_id` is unknown to the seller (never finalized, wrong tenant, or evicted from cache) | Re-issue `get_products` in `refine` mode with `action: 'finalize'` to obtain a current proposal_id |
 | `MULTI_FINALIZE_UNSUPPORTED` | `refine[]` carried multiple `action: 'finalize'` entries but the seller cannot guarantee atomic multi-proposal commit | Sequence single-proposal finalize calls — one finalize entry per `get_products` call |
+| `INVALID_STATE` | A buyer attempts to execute a proposal version previously declined with `action: "decline"` | Re-discover or refine to obtain a current proposal version |
 | `POLICY_VIOLATION` | Category blocked for advertiser | See policy response message for details |
 
 ### Authentication Comparison

@@ -125,22 +125,147 @@
                 "minLength": 1,
                 "description": "Proposal ID from a previous get_products response."
               },
+              "proposal_version": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 255,
+                "description": "Opaque proposal_version from the proposal the buyer is acting on. Required when action is 'decline' so the decline applies to the exact offer state the buyer evaluated. Buyers SHOULD include it for other proposal actions when the prior proposal carried proposal_version."
+              },
               "action": {
                 "type": "string",
                 "enum": [
                   "include",
                   "omit",
-                  "finalize"
+                  "finalize",
+                  "decline"
                 ],
                 "default": "include",
-                "description": "'include' (default): return this proposal with updated allocations and pricing. 'omit': exclude this proposal from the response. 'finalize': request firm pricing and inventory hold — transitions a draft proposal to committed with an expires_at hold window. May trigger seller-side approval (HITL). The buyer should not set a time_budget for finalize requests — they represent a commitment to wait for the result. Optional — when omitted, the seller treats the entry as action: 'include'.\n\nFinalize is exclusive within the parent `refine[]` array: see the array-level description for the finalize-exclusivity rule (mixing finalize with non-finalize entries is rejected) and multi-finalize atomicity contract."
+                "description": "'include' (default): return this proposal with updated allocations and pricing. 'omit': exclude this proposal from the response without marking a terminal outcome. 'finalize': request firm pricing and inventory hold — transitions a draft proposal to committed with an expires_at hold window. May trigger seller-side approval (HITL). The buyer should not set a time_budget for finalize requests — they represent a commitment to wait for the result. 'decline': terminally report that the buyer evaluated this proposal version and is not pursuing it. A declined proposal version MUST NOT be executed later via create_media_buy; sellers MUST reject such attempts with INVALID_STATE. Optional — when omitted, the seller treats the entry as action: 'include'.\n\nFinalize is exclusive within the parent `refine[]` array: see the array-level description for the finalize-exclusivity rule (mixing finalize with non-finalize entries is rejected) and multi-finalize atomicity contract."
+              },
+              "reason": {
+                "type": "string",
+                "oneOf": [
+                  {
+                    "const": "price",
+                    "description": "The proposal's price, rate, or cost efficiency did not meet the buyer's requirement."
+                  },
+                  {
+                    "const": "inventory_fit",
+                    "description": "The inventory, placements, format mix, availability, or forecast did not fit the brief."
+                  },
+                  {
+                    "const": "audience_fit",
+                    "description": "The proposal did not sufficiently match the buyer's audience or targeting requirements."
+                  },
+                  {
+                    "const": "creative_unsupported",
+                    "description": "The proposal could not support the buyer's required creative format, asset, or production workflow."
+                  },
+                  {
+                    "const": "measurement_unsupported",
+                    "description": "The proposal could not support the buyer's required measurement, reporting, attribution, or verification needs."
+                  },
+                  {
+                    "const": "policy",
+                    "description": "The proposal was incompatible with buyer, seller, governance, legal, or brand-suitability policy requirements."
+                  },
+                  {
+                    "const": "timing",
+                    "description": "The schedule, expiry, approval timing, or delivery window did not fit the buyer's need."
+                  },
+                  {
+                    "const": "budget_changed",
+                    "description": "The buyer's budget, scope, or campaign plan changed after evaluation."
+                  },
+                  {
+                    "const": "selected_alternative",
+                    "description": "The buyer selected another approach or supply source. The detail field MUST NOT identify the competitor or disclose confidential clearing terms."
+                  },
+                  {
+                    "const": "other",
+                    "description": "Another reason. The buyer MUST include a short, non-identifying detail."
+                  }
+                ],
+                "description": "Machine-readable reason for action 'decline'. Required when declining a proposal. Sellers use this for aggregate proposal feedback; buyers MUST NOT include competitor identity or other sensitive detail."
+              },
+              "detail": {
+                "type": "string",
+                "maxLength": 500,
+                "description": "Optional short, non-identifying explanation for action 'decline'. MUST NOT include competitor identity or sensitive campaign information."
               },
               "ask": {
                 "type": "string",
                 "minLength": 1,
-                "description": "What the buyer is asking for on this proposal (e.g., 'shift more budget toward video', 'reduce total by 10%'). Ignored when action is 'omit'."
+                "description": "What the buyer is asking for on this proposal (e.g., 'shift more budget toward video', 'reduce total by 10%'). Ignored when action is 'omit' or 'decline'."
               }
             },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "action": {
+                      "const": "decline"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                },
+                "then": {
+                  "required": [
+                    "proposal_version",
+                    "reason"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "not": {
+                    "properties": {
+                      "action": {
+                        "const": "decline"
+                      }
+                    },
+                    "required": [
+                      "action"
+                    ]
+                  }
+                },
+                "then": {
+                  "not": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "reason"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "detail"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "reason": {
+                      "const": "other"
+                    }
+                  },
+                  "required": [
+                    "reason"
+                  ]
+                },
+                "then": {
+                  "required": [
+                    "detail"
+                  ]
+                }
+              }
+            ],
             "required": [
               "scope",
               "proposal_id"
@@ -157,6 +282,10 @@
     "catalog": {
       "$ref": "/schemas/core/catalog.json",
       "description": "Catalog of items the buyer wants to promote. The seller matches catalog items against its inventory and returns products where matches exist. Supports all catalog types: a job catalog finds job ad products, a product catalog finds sponsored product slots. Reference a synced catalog by catalog_id, or provide inline items."
+    },
+    "opportunity": {
+      "$ref": "/schemas/core/opportunity-context.json",
+      "description": "Optional buyer-supplied planning-cycle context that can span multiple discovery, refinement, proposal, decline, and create_media_buy calls. Meaningful for buying_mode: 'brief' and buying_mode: 'refine'; sellers MUST ignore it for buying_mode: 'wholesale' feed reads."
     },
     "account": {
       "$ref": "/schemas/core/account-ref.json",

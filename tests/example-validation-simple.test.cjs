@@ -1172,6 +1172,10 @@ async function runTests() {
   await validateExample(
     {
       "buying_mode": "refine",
+      "opportunity": {
+        "opportunity_id": "opp_01HX7W8S3Q9K2M4N6P0R5T1V",
+        "phase": "active_sourcing"
+      },
       "refine": [
         { "scope": "product",  "product_id":  "prod_video_premium" },
         { "scope": "proposal", "proposal_id": "prop_balanced_v1", "ask": "shift 20% to video" }
@@ -1179,6 +1183,217 @@ async function runTests() {
     },
     '/schemas/media-buy/get-products-request.json',
     'refine[] with new prefixed ids and omitted action (defaults to include)'
+  );
+
+  await validateExample(
+    {
+      "buying_mode": "brief",
+      "brief": "Nova Soda Q3 campaign ideas for Gen Z summer moments",
+      "brand": { "domain": "novasoda.example" },
+      "opportunity": {
+        "opportunity_id": "opp_01HX7W8S3Q9K2M4N6P0R5T1V",
+        "phase": "exploratory",
+        "planning_horizon": {
+          "start": "2026-07-01",
+          "end": "2026-09-30"
+        },
+        "response_deadline": "2026-06-30T21:00:00Z"
+      }
+    },
+    '/schemas/media-buy/get-products-request.json',
+    'get_products accepts opportunity context'
+  );
+
+  await validateExample(
+    {
+      "buying_mode": "refine",
+      "opportunity": {
+        "opportunity_id": "opp_01HX7W8S3Q9K2M4N6P0R5T1V",
+        "status": "closed",
+        "close_reason": "not_pursued"
+      },
+      "refine": [
+        { "scope": "request", "ask": "Close this planning cycle; we are not pursuing the opportunity." }
+      ]
+    },
+    '/schemas/media-buy/get-products-request.json',
+    'get_products accepts closed opportunity context'
+  );
+
+  await expectInvalid(
+    {
+      "buying_mode": "brief",
+      "brief": "Nova Soda Q3 campaign ideas for Gen Z summer moments",
+      "opportunity": {
+        "phase": "exploratory"
+      }
+    },
+    '/schemas/media-buy/get-products-request.json',
+    'get_products opportunity requires opportunity_id',
+    ['opportunity_id']
+  );
+
+  await expectInvalid(
+    {
+      "buying_mode": "brief",
+      "brief": "Nova Soda Q3 campaign ideas for Gen Z summer moments",
+      "opportunity": {
+        "opportunity_id": "opp_01HX7W8S3Q9K2M4N6P0R5T1V",
+        "close_reason": "not_pursued"
+      }
+    },
+    '/schemas/media-buy/get-products-request.json',
+    'get_products opportunity close_reason requires closed status',
+    ['must NOT be valid']
+  );
+
+  await validateExample(
+    {
+      "buying_mode": "refine",
+      "refine": [
+        {
+          "scope": "proposal",
+          "proposal_id": "prop_balanced_v1",
+          "proposal_version": "4",
+          "action": "decline",
+          "reason": "price",
+          "detail": "Above target CPM range"
+        }
+      ]
+    },
+    '/schemas/media-buy/get-products-request.json',
+    'refine[] proposal decline with version and reason'
+  );
+
+  await expectInvalid(
+    {
+      "buying_mode": "refine",
+      "refine": [
+        {
+          "scope": "proposal",
+          "proposal_id": "prop_balanced_v1",
+          "action": "decline",
+          "reason": "price"
+        }
+      ]
+    },
+    '/schemas/media-buy/get-products-request.json',
+    'refine[] proposal decline requires proposal_version',
+    ['proposal_version']
+  );
+
+  await expectInvalid(
+    {
+      "buying_mode": "refine",
+      "refine": [
+        {
+          "scope": "proposal",
+          "proposal_id": "prop_balanced_v1",
+          "proposal_version": "4",
+          "action": "decline"
+        }
+      ]
+    },
+    '/schemas/media-buy/get-products-request.json',
+    'refine[] proposal decline requires reason',
+    ['reason']
+  );
+
+  await expectInvalid(
+    {
+      "buying_mode": "refine",
+      "refine": [
+        {
+          "scope": "proposal",
+          "proposal_id": "prop_balanced_v1",
+          "action": "omit",
+          "reason": "price"
+        }
+      ]
+    },
+    '/schemas/media-buy/get-products-request.json',
+    'refine[] non-decline proposal action rejects reason',
+    ['must NOT be valid']
+  );
+
+  await expectInvalid(
+    {
+      "buying_mode": "refine",
+      "refine": [
+        {
+          "scope": "proposal",
+          "proposal_id": "prop_balanced_v1",
+          "proposal_version": "4",
+          "action": "decline",
+          "reason": "other"
+        }
+      ]
+    },
+    '/schemas/media-buy/get-products-request.json',
+    'refine[] proposal decline with other reason requires detail',
+    ['detail']
+  );
+
+  await validateExample(
+    {
+      "idempotency_key": "create-proposal-version-123",
+      "account": { "account_id": "acct_123" },
+      "brand": { "domain": "acmecorp.example" },
+      "proposal_id": "prop_balanced_v1",
+      "proposal_version": "4",
+      "opportunity": {
+        "opportunity_id": "opp_01HX7W8S3Q9K2M4N6P0R5T1V",
+        "status": "closed",
+        "close_reason": "accepted_with_seller"
+      },
+      "total_budget": { "amount": 50000, "currency": "USD" },
+      "start_time": "2026-04-01T00:00:00Z",
+      "end_time": "2026-04-30T23:59:59Z"
+    },
+    '/schemas/media-buy/create-media-buy-request.json',
+    'create_media_buy accepts proposal_version with proposal_id'
+  );
+
+  await expectInvalid(
+    {
+      "idempotency_key": "create-proposal-version-789",
+      "account": { "account_id": "acct_123" },
+      "brand": { "domain": "acmecorp.example" },
+      "proposal_id": "prop_balanced_v1",
+      "proposal_version": "4",
+      "opportunity": {
+        "opportunity_id": "opp_01HX7W8S3Q9K2M4N6P0R5T1V",
+        "status": "closed",
+        "close_reason": "not_pursued"
+      },
+      "total_budget": { "amount": 50000, "currency": "USD" },
+      "start_time": "2026-04-01T00:00:00Z",
+      "end_time": "2026-04-30T23:59:59Z"
+    },
+    '/schemas/media-buy/create-media-buy-request.json',
+    'create_media_buy closed opportunity rejects non-accepted close_reason',
+    ['accepted_with_seller']
+  );
+
+  await expectInvalid(
+    {
+      "idempotency_key": "create-proposal-version-456",
+      "account": { "account_id": "acct_123" },
+      "brand": { "domain": "acmecorp.example" },
+      "proposal_version": "4",
+      "packages": [
+        {
+          "product_id": "prod_video_premium",
+          "pricing_option_id": "cpm_fixed",
+          "budget": 50000
+        }
+      ],
+      "start_time": "2026-04-01T00:00:00Z",
+      "end_time": "2026-04-30T23:59:59Z"
+    },
+    '/schemas/media-buy/create-media-buy-request.json',
+    'create_media_buy proposal_version requires proposal_id',
+    ['proposal_id']
   );
 
   // Measurement capability block — locks the discovery shape down
