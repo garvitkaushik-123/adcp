@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.1.0-rc.16
+
+### Patch Changes
+
+- b49463d: Patch 3.0 compatibility bundles so the frozen `schema_validation` past-start
+  branch-set steps use explicit `contributes_to: past_start_handled` flags instead
+  of the newer `contributes: true` shorthand. This avoids older runner paths
+  missing a passing branch contribution before the final `assert_contribution`
+  check, without ignoring real synthetic assertion failures.
+- 9044bd3: Add stable validation IDs and tighter atomic-success assertions to the refine finalize-exclusivity storyboard so multi-finalize grading failures identify the exact failing assertion in reports.
+- 85401c5: Add an admin publisher `adagents.json` revalidation endpoint that refreshes the cached registry verdict, records validation metadata, and retires stale publisher-origin authorizations when a live recheck fails.
+
 ## 3.1.0-rc.15
 
 ### Minor Changes
