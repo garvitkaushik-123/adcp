@@ -1171,6 +1171,48 @@ export async function createChannel(
 }
 
 /**
+ * Recover from a `not_in_channel` invite failure by self-joining the
+ * channel and retrying the invite.
+ *
+ * Slack only lets a bot self-join *public* channels — private channels
+ * require an existing member to add the bot, so there is nothing to try
+ * there and we return false to let the caller escalate. Any join or
+ * retry-invite failure (missing `channels:join` scope, archived channel,
+ * a race that re-removed the bot) also returns false so the caller falls
+ * back to its existing escalation path rather than masking the problem.
+ */
+async function tryJoinAndInvite(channelId: string, userIds: string[]): Promise<boolean> {
+  const info = await getChannelInfo(channelId);
+  if (!info || info.is_private) {
+    return false;
+  }
+
+  try {
+    await slackPostRequest<{ ok: boolean }>('conversations.join', {
+      channel: channelId,
+    });
+    await slackPostRequest<{ ok: boolean }>('conversations.invite', {
+      channel: channelId,
+      users: userIds.join(','),
+    });
+    logger.info(
+      { channelId, userCount: userIds.length },
+      'Bot auto-joined public channel and completed invite after not_in_channel',
+    );
+    return true;
+  } catch (joinError) {
+    logger.warn(
+      {
+        err: joinError instanceof Error ? joinError : new Error(String(joinError)),
+        channelId,
+      },
+      'Failed to auto-join public channel after not_in_channel',
+    );
+    return false;
+  }
+}
+
+/**
  * Invite users to a channel
  *
  * @param channelId - The channel to invite to
@@ -1200,6 +1242,17 @@ export async function inviteToChannel(
       return { ok: true };
     }
 
+    // not_in_channel means the bot isn't a member of the target channel.
+    // For public channels the bot can self-join and complete the invite,
+    // so attempt that recovery before giving up — this is the common case
+    // and turns a silent failure into a successful invite. Private
+    // channels can't be self-joined, so they fall through to escalation.
+    if (errorMessage.includes('not_in_channel')) {
+      if (await tryJoinAndInvite(channelId, userIds)) {
+        return { ok: true };
+      }
+    }
+
     // Slack errors that are routine and not actionable: bot isn't in the channel,
     // channel was archived/deleted, target user is restricted/disabled. Log at
     // warn — caller already gets `{ ok: false, error }` and decides what to do.
@@ -1217,7 +1270,8 @@ export async function inviteToChannel(
       'Failed to invite users to channel',
     );
 
-    // not_in_channel is actionable — someone has to invite the bot or fix
+    // not_in_channel that we couldn't auto-recover (private channel, or the
+    // self-join failed) is actionable — someone has to invite the bot or fix
     // the calling code. Create a deduplicated operational escalation so the
     // signal stays in the queue without paging anyone. Other expected codes
     // are user-side (restricted account, archived channel) and don't need
