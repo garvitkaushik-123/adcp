@@ -112,21 +112,30 @@ describe('recordCost', () => {
 });
 
 describe('formatCapExceededMessage', () => {
-  it('includes the tier cap, current spend, and reset time', () => {
+  // #5633 / #5634 / #5639: the member-facing message must not leak
+  // internal accounting (dollar amounts, the cap value, "Claude API"
+  // framing, or a precise countdown), and the upgrade CTA must point
+  // at the canonical /dashboard/membership route.
+  it('gives non-paying members a friendly upgrade CTA without internal accounting', () => {
     const msg = formatCapExceededMessage({
       ok: false,
-      spentCents: 550,
+      spentCents: 621,
       remainingUsd: 0,
       retryAfterMs: 45 * 60 * 1000, // 45 min
       tier: 'member_free',
     });
-    expect(msg).toContain('5 USD'); // member_free cap
-    expect(msg).toContain('$5.50'); // current spend
-    expect(msg).toContain('45 minutes');
-    expect(msg).toContain('Upgrade'); // CTA for non-paying
+    expect(msg).toContain('daily conversation limit');
+    expect(msg).toContain('[Upgrade your membership](/dashboard/membership)'); // canonical route
+    expect(msg).toContain('try again tomorrow');
+    // No internal accounting or scary infra framing leaked to the member.
+    expect(msg).not.toContain('USD');
+    expect(msg).not.toContain('$');
+    expect(msg).not.toContain('Claude');
+    expect(msg).not.toContain('minute');
+    expect(msg).not.toContain('(/membership)'); // never the bare 404 route
   });
 
-  it('tells paying members to ping the team instead of upgrade', () => {
+  it('tells paying members to reach out to the team instead of upgrade', () => {
     const msg = formatCapExceededMessage({
       ok: false,
       spentCents: 2500,
@@ -134,7 +143,10 @@ describe('formatCapExceededMessage', () => {
       tier: 'member_paid',
     });
     expect(msg).toContain('AgenticAdvertising.org team');
+    expect(msg).toContain('try again tomorrow');
     expect(msg).not.toContain('Upgrade');
+    expect(msg).not.toContain('$');
+    expect(msg).not.toContain('Claude');
   });
 });
 

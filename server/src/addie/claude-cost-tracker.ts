@@ -231,35 +231,26 @@ export async function recordCost(
 }
 
 /**
- * Format a user-facing message when the cap is hit. Surfaces the
- * tier, current spend, and approximate reset time so the user
- * understands what happened.
+ * Format a user-facing message when the cap is hit.
+ *
+ * Deliberately abstracts away the internal accounting (#5633, #5634,
+ * #5639): no raw dollar figures, no "Claude API" framing, and no
+ * precise countdown — those expose implementation detail a member
+ * can't act on and read as scary infra errors. The exact spend and
+ * `retryAfterMs` are still emitted to the logs at the call site for
+ * ops, so dropping them here loses no observability. The upgrade CTA
+ * links to the canonical `/dashboard/membership` route (the bare
+ * `/membership` path 404s).
  */
 export function formatCapExceededMessage(result: CostCheckResult): string {
   const tier = result.tier ?? 'anonymous';
   if (tier === 'aao_team') {
     return 'AAO team usage is uncapped.';
   }
-  const capUsd = DAILY_BUDGET_USD[tier];
-  const spentUsd = ((result.spentCents ?? 0) / 100).toFixed(2);
-  // Render the wait as hours when a user trips the cap early in the
-  // window — "reset in ~1440 minutes" reads as noise. Minutes only
-  // below 2 hours; rounded hours beyond that. The number is already
-  // approximate (the user can retry sooner as individual charges
-  // drop out), so hours-as-round-numbers is honest.
-  const retryMs = result.retryAfterMs ?? 60_000;
-  const retryMinutes = Math.max(1, Math.ceil(retryMs / 60_000));
-  const humanReset = retryMinutes >= 120
-    ? `~${Math.ceil(retryMinutes / 60)} hour${retryMinutes >= 180 ? 's' : ''}`
-    : `~${retryMinutes} minute${retryMinutes === 1 ? '' : 's'}`;
-  return (
-    `You've hit today's Claude API usage cap (${capUsd} USD) — ` +
-    `spent ≈ $${spentUsd} in the last 24 hours. ` +
-    `You can try again in ${humanReset}. ` +
-    (tier === 'member_paid'
-      ? 'Ping the AgenticAdvertising.org team if you need a higher ceiling for legitimate work.'
-      : 'Upgrade your membership at /membership for a higher daily ceiling.')
-  );
+  const base = "You've reached your daily conversation limit with Addie.";
+  return tier === 'member_paid'
+    ? `${base} Reach out to the AgenticAdvertising.org team if you need a higher limit, or try again tomorrow.`
+    : `${base} [Upgrade your membership](/dashboard/membership) for a higher limit, or try again tomorrow.`;
 }
 
 /**
