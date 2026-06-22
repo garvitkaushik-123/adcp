@@ -1,0 +1,335 @@
+From b0fdc906acb19733f052d45d4e1ee2d7d8ed0648 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 19 Jun 2026 12:56:20 +0000
+Subject: [PATCH 1/2] =?UTF-8?q?feat(migrate):=20add=20per-module=20collisi?=
+ =?UTF-8?q?on=20alias=20hints=20to=20v3=E2=86=92v4=20codemod=20(issue=20#9?=
+ =?UTF-8?q?11,=20Step=203)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+When an adopter imports a collision symbol (e.g. `Account`, `Creative`,
+`Sort`) directly from a `generated_poc` submodule, the codemod now
+knows which module they're reaching into and emits the exact qualified
+alias from `adcp.types` in the `after` field of each `flag_private`
+finding — replacing the generic "private module" message with an
+immediately actionable hint.
+
+Changes:
+- Add `GENERATED_POC_COLLISION_SYMBOL_MAP: dict[tuple[str, str], str]`
+  with 38 entries covering 11 collision groups (Account, Authentication,
+  Creative, CreditLimit, DeclaredBy, GovernanceAgent, MediaBuy, Setup,
+  Signal, Sort, Unit).
+- Update `_GENERATED_POC_FROM_IMPORT` regex to capture the module suffix
+  in group(1) and the symbol list in group(2).
+- Rewrite the `flag_private` detection block in `scan_file()` to look up
+  `(module_suffix, symbol)` in the collision map and emit the precise
+  qualified alias; collision findings are always `flag_private` (never
+  auto-applied) because usage sites need renaming too.
+- Update pre-pass and auto-apply section to use the new group numbering.
+- Add 5 new tests: collision map API-coverage guard, per-module hint
+  correctness (Account→CoreAccount, Creative→ListCreativesCreative),
+  multi-module hint correctness, and never-auto-applied assertion.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+---
+ src/adcp/migrate/v3_to_v4.py   | 196 ++++++++++++++++++++++++++-------
+ tests/test_migrate_v3_to_v4.py | 100 +++++++++++++++++
+ 2 files changed, 258 insertions(+), 38 deletions(-)
+
+diff --git a/src/adcp/migrate/v3_to_v4.py b/src/adcp/migrate/v3_to_v4.py
+index 4949caf4..3aa70aef 100644
+--- a/src/adcp/migrate/v3_to_v4.py
++++ b/src/adcp/migrate/v3_to_v4.py
+@@ -145,16 +145,11 @@ PRIVATE_IMPORT_PATHS: dict[str, str] = {
+ # ``test_generated_poc_symbol_map_covers_publicly_exported_names`` test
+ # guards drift between this map and the SDK's public surface.
+ #
+-# Intentionally NOT in the map (yet): ``CreditLimit``, ``Setup``,
+-# ``GovernanceAgent``. These names appear in 8+ generated files
+-# (``core/account.py``, ``account/sync_accounts_response.py``,
+-# ``media_buy/sync_event_sources_response.py``, ``bundled/...``) — the
+-# codegen emits one independent class per containing schema, so a
+-# blanket "import from adcp.types" hint would be ambiguous about
+-# which variant. Adopters reaching for these get the generic
+-# private-module flag; landing them in the public API is a separate
+-# design decision (which canonical variant to expose / whether to
+-# expose schema-namespaced aliases like ``AccountSetup``).
++# Collision aliases (types defined in multiple modules, each with a
++# distinct public alias) are NOT in this map — they live in
++# GENERATED_POC_COLLISION_SYMBOL_MAP, keyed by (module_suffix, symbol)
++# so the codemod can point adopters at the exact qualified alias for the
++# module they were importing from (issue #911, Step 3).
+ GENERATED_POC_SYMBOL_MAP: dict[str, str] = {
+     "AccountReference": "adcp.types.AccountReference",
+     "BrandReference": "adcp.types.BrandReference",
+@@ -167,13 +162,96 @@ GENERATED_POC_SYMBOL_MAP: dict[str, str] = {
+ }
+ 
+ 
+-# ``from adcp.types.generated_poc.<...> import <Symbol[, ...]>`` —
+-# captures the symbol list so we can emit per-symbol replacement hints.
++# Per-module collision alias map (issue #911, Step 3).
++#
++# Several bare type names are defined in more than one generated_poc
++# module; each variant has a distinct qualified alias in adcp.types
++# (see src/adcp/types/aliases.py, Step 2). When an adopter imports
++# a collision symbol directly from generated_poc, the codemod now
++# knows WHICH module they're reaching into and can therefore point
++# them at the exact public alias rather than the generic "private
++# module" flag.
++#
++# Mapping shape: ``(module_suffix, symbol) → adcp.types.<QualifiedAlias>``.
++# ``module_suffix`` is the dot-joined path after ``adcp.types.generated_poc.``
++# (e.g. ``"core.account"`` for ``adcp.types.generated_poc.core.account``).
++#
++# Every value is a qualified ``adcp.types.<Name>`` string; the
++# ``test_generated_poc_collision_symbol_map_covers_publicly_exported_names``
++# test guards drift between this map and the SDK's public surface.
++#
++# Unlike GENERATED_POC_SYMBOL_MAP entries, collision aliases require the
++# adopter to rename usage sites too (e.g., every bare ``Account`` in the
++# file must become ``CoreAccount``). The codemod therefore always emits
++# these as ``flag_private`` — never auto-applied — but carries the
++# precise alias in the ``after`` field so the report is actionable.
++GENERATED_POC_COLLISION_SYMBOL_MAP: dict[tuple[str, str], str] = {
++    # Account — 4 variants
++    ("core.account", "Account"): "adcp.types.CoreAccount",
++    ("account.sync_accounts_response", "Account"): "adcp.types.SyncAccountsAccount",
++    ("account.sync_governance_request", "Account"): "adcp.types.SyncGovernanceAccount",
++    ("protocol.get_adcp_capabilities_response", "Account"): "adcp.types.CapabilitiesAccount",
++    # Authentication — 5 variants
++    ("core.push_notification_config", "Authentication"): "adcp.types.PushNotificationAuthentication",
++    ("core.notification_config", "Authentication"): "adcp.types.NotificationAuthentication",
++    ("core.reporting_webhook", "Authentication"): "adcp.types.ReportingWebhookAuthentication",
++    ("account.sync_governance_request", "Authentication"): "adcp.types.GovernanceAuthentication",
++    (
++        "media_buy.create_media_buy_request",
++        "Authentication",
++    ): "adcp.types.CreateMediaBuyAuthentication",
++    # Creative — 5 variants
++    ("creative.get_creative_delivery_response", "Creative"): "adcp.types.DeliveryCreative",
++    ("creative.list_creatives_response", "Creative"): "adcp.types.ListCreativesCreative",
++    ("creative.sync_creatives_response", "Creative"): "adcp.types.SyncCreativesCreative",
++    ("media_buy.build_creative_response", "Creative"): "adcp.types.BuildCreativeCreative",
++    ("protocol.get_adcp_capabilities_response", "Creative"): "adcp.types.CapabilitiesCreative",
++    # CreditLimit — 2 variants
++    ("core.account", "CreditLimit"): "adcp.types.CoreCreditLimit",
++    ("account.sync_accounts_response", "CreditLimit"): "adcp.types.SyncAccountsCreditLimit",
++    # DeclaredBy — 2 variants
++    ("core.provenance", "DeclaredBy"): "adcp.types.ProvenanceDeclaredBy",
++    (
++        "sponsored_intelligence.si_sponsored_context",
++        "DeclaredBy",
++    ): "adcp.types.SiSponsoredContextDeclaredBy",
++    # GovernanceAgent — 2 variants
++    ("core.account", "GovernanceAgent"): "adcp.types.CoreGovernanceAgent",
++    (
++        "account.sync_governance_request",
++        "GovernanceAgent",
++    ): "adcp.types.SyncGovernanceGovernanceAgent",
++    # MediaBuy — 3 variants
++    ("core.media_buy", "MediaBuy"): "adcp.types.CoreMediaBuy",
++    ("media_buy.get_media_buys_response", "MediaBuy"): "adcp.types.GetMediaBuysMediaBuy",
++    ("protocol.get_adcp_capabilities_response", "MediaBuy"): "adcp.types.CapabilitiesMediaBuy",
++    # Setup — 3 variants
++    ("core.account", "Setup"): "adcp.types.CoreSetup",
++    ("account.sync_accounts_response", "Setup"): "adcp.types.SyncAccountsSetup",
++    ("media_buy.sync_event_sources_response", "Setup"): "adcp.types.SyncEventSourcesSetup",
++    # Signal — 2 variants
++    ("signals.get_signals_response", "Signal"): "adcp.types.GetSignalsSignal",
++    ("core.wholesale_feed_event", "Signal"): "adcp.types.WholesaleFeedSignal",
++    # Sort — 3 variants
++    ("creative.list_creatives_request", "Sort"): "adcp.types.ListCreativesSort",
++    ("core.tasks_list_request", "Sort"): "adcp.types.TasksListSort",
++    ("protocol.list_tasks_request", "Sort"): "adcp.types.ListTasksSort",
++    # Unit — 4 variants
++    ("core.duration", "Unit"): "adcp.types.DurationUnit",
++    ("core.overlay", "Unit"): "adcp.types.OverlayUnit",
++    ("core.real_estate_item", "Unit"): "adcp.types.RealEstateUnit",
++    ("core.vehicle_item", "Unit"): "adcp.types.VehicleUnit",
++}
++
++
++# ``from adcp.types.generated_poc.<module> import <Symbol[, ...]>`` —
++# group(1) captures the module suffix (e.g. ``.core.account``);
++# group(2) captures the symbol list.
+ # Multiline imports (parenthesized) aren't covered by this regex; they
+ # fall through to the generic "private module" flag, which still
+ # surfaces the issue and prints the migration anchor.
+ _GENERATED_POC_FROM_IMPORT = re.compile(
+-    r"from\s+adcp\.types\.generated_poc(?:\.[ \w.]+)?\s+import\s+([\w\s,]+)"
++    r"from\s+adcp\.types\.generated_poc((?:\.[ \w.]+)?)\s+import\s+([\w\s,]+)"
+ )
+ 
+ 
+@@ -392,7 +470,7 @@ def scan_file(
+         if "adcp.types.generated_poc" in line:
+             from_match = _GENERATED_POC_FROM_IMPORT.search(line)
+             if from_match:
+-                raw_syms = [s.strip() for s in from_match.group(1).split(",")]
++                raw_syms = [s.strip() for s in from_match.group(2).split(",")]
+                 pre_syms = [r.split(" as ")[0].strip() for r in raw_syms if r.strip()]
+                 post_syms = [NUMBERED_ASSETS_RENAMES.get(s, s) for s in pre_syms]
+                 if pre_syms and not all(s in _AUTO_APPLY_PUBLIC_SYMBOLS for s in post_syms):
+@@ -484,8 +562,16 @@ def scan_file(
+             col = line.index(private_path) + 1
+             from_match = _GENERATED_POC_FROM_IMPORT.search(line)
+             if from_match:
+-                raw_symbols = [s.strip() for s in from_match.group(1).split(",")]
+-                parsed: list[tuple[str, str | None]] = []
++                module_suffix = from_match.group(1).lstrip(".")
++                raw_symbols = [s.strip() for s in from_match.group(2).split(",")]
++                parsed: list[tuple[str, str | None, bool]] = []
+                 for raw in raw_symbols:
+                     raw = raw.strip()
+                     if not raw:
+@@ -493,7 +579,13 @@ def scan_file(
+                     symbol = raw.split(" as ")[0].strip()
+                     if not symbol:
+                         continue
+-                    parsed.append((symbol, GENERATED_POC_SYMBOL_MAP.get(symbol)))
++                    collision_repl = GENERATED_POC_COLLISION_SYMBOL_MAP.get(
++                        (module_suffix, symbol)
++                    )
++                    if collision_repl is not None:
++                        parsed.append((symbol, collision_repl, True))
++                    else:
++                        parsed.append((symbol, GENERATED_POC_SYMBOL_MAP.get(symbol), False))
+ 
+                 if not parsed:
+                     findings.append(
+@@ -508,33 +600,61 @@ def scan_file(
+                     )
+                     continue
+ 
++                all_known = all(
++                    (not is_collision and repl is not None)
++                    or (auto_apply and symbol in NUMBERED_ASSETS_RENAMES)
++                    for symbol, repl, is_collision in parsed
++                )
++
+-                all_known = all(
+-                    repl is not None or (auto_apply and symbol in NUMBERED_ASSETS_RENAMES)
+-                    for symbol, repl in parsed
+-                )
+-
+-                for symbol, replacement in parsed:
+-                    sym_col = line.find(symbol, from_match.start(1)) + 1
++                for symbol, replacement, is_collision in parsed:
++                    sym_col = line.find(symbol, from_match.start(2)) + 1
+                     if sym_col <= 0:
+                         sym_col = col
+                     if replacement is not None:
+-                        kind = "auto_applied" if (auto_apply and all_known) else "flag_private"
+-                        if kind == "auto_applied":
+-                            auto_apply_hits = True
+-                        findings.append(
+-                            Finding(
+-                                kind=kind,
+-                                path=str(path),
+-                                line=lineno,
+-                                column=sym_col,
+-                                before=symbol,
+-                                after=replacement,
+-                                hint=(
+-                                    f"private module — import {symbol} from "
+-                                    "adcp.types (stable public API) instead"
+-                                ),
++                        if is_collision:
++                            qualified_alias = replacement.rsplit(".", 1)[-1]
++                            findings.append(
++                                Finding(
++                                    kind="flag_private",
++                                    path=str(path),
++                                    line=lineno,
++                                    column=sym_col,
++                                    before=symbol,
++                                    after=replacement,
++                                    hint=(
++                                        f"private module — import {qualified_alias} from "
++                                        f"adcp.types instead (also rename usage sites "
++                                        f"from {symbol} to {qualified_alias})"
++                                    ),
++                                )
++                            )
++                        else:
++                            kind = (
++                                "auto_applied" if (auto_apply and all_known) else "flag_private"
++                            )
++                            if kind == "auto_applied":
++                                auto_apply_hits = True
++                            findings.append(
++                                Finding(
++                                    kind=kind,
++                                    path=str(path),
++                                    line=lineno,
++                                    column=sym_col,
++                                    before=symbol,
++                                    after=replacement,
++                                    hint=(
++                                        f"private module — import {symbol} from "
++                                        "adcp.types (stable public API) instead"
++                                    ),
++                                )
+                             )
+-                        )
+                     else:
+                         # Unknown symbol.  Suppress the generic flag when
+                         # auto_apply is active and the symbol is a numbered
+@@ -624,7 +744,7 @@ def scan_file(
+             if is_generated_poc_import:
+                 m = _GENERATED_POC_FROM_IMPORT.search(text_line)
+                 assert m is not None  # narrowed above
+-                raw_syms = [s.strip() for s in m.group(1).split(",")]
++                raw_syms = [s.strip() for s in m.group(2).split(",")]
+                 pre_syms = [r.split(" as ")[0].strip() for r in raw_syms if r.strip()]
+                 # Apply the hypothetical numbered rename to each symbol
+                 # so we can check if the *post-rename* symbol set is
+diff --git a/tests/test_migrate_v3_to_v4.py b/tests/test_migrate_v3_to_v4.py
+index af521ff8..ec467105 100644
+--- a/tests/test_migrate_v3_to_v4.py
++++ b/tests/test_migrate_v3_to_v4.py
+@@ -995,6 +995,106 @@ def test_auto_apply_json_auto_applied_empty_without_flag(
+     assert payload["auto_applied"] == []
+ 
+ 
++def test_generated_poc_collision_symbol_map_covers_publicly_exported_names() -> None:
++    import importlib
++    types_module = importlib.import_module("adcp.types")
++    for (module_suffix, symbol), replacement in v3_to_v4.GENERATED_POC_COLLISION_SYMBOL_MAP.items():
++        qualified_alias = replacement.rsplit(".", 1)[-1]
++        assert hasattr(types_module, qualified_alias)
++
++def test_flags_collision_alias_with_precise_hint(tmp_path: Path) -> None:
++    _write(tmp_path, "code.py", "from adcp.types.generated_poc.core.account import Account\n")
++    report = v3_to_v4.run(tmp_path, apply_changes=False)
++    private = [f for f in report.flagged if f.kind == "flag_private"]
++    by_symbol = {f.before: f for f in private}
++    assert "Account" in by_symbol
++    finding = by_symbol["Account"]
++    assert finding.after == "adcp.types.CoreAccount"
++    assert finding.hint is not None and "CoreAccount" in finding.hint
++
++def test_flags_collision_alias_multiple_modules_different_hints(tmp_path: Path) -> None:
++    _write(tmp_path, "code.py",
++        "from adcp.types.generated_poc.account.sync_accounts_response import Account\n"
++        "from adcp.types.generated_poc.creative.list_creatives_response import Creative\n")
++    report = v3_to_v4.run(tmp_path, apply_changes=False)
++    private = [f for f in report.flagged if f.kind == "flag_private"]
++    by_symbol = {f.before: f for f in private}
++    assert by_symbol["Account"].after == "adcp.types.SyncAccountsAccount"
++    assert by_symbol["Creative"].after == "adcp.types.ListCreativesCreative"
++
++def test_collision_alias_not_auto_applied(tmp_path: Path) -> None:
++    path = _write(tmp_path, "code.py",
++        "from adcp.types.generated_poc.core.account import Account\n"
++        "acc: Account = Account(id='x')\n")
++    original = path.read_text()
++    report = v3_to_v4.run(tmp_path, apply_changes=True, auto_apply=True)
++    assert path.read_text() == original
++    flagged_symbols = {f.before for f in report.flagged if f.kind == "flag_private"}
++    assert "Account" in flagged_symbols
++    assert report.auto_applied == []
+-- 
+2.43.0

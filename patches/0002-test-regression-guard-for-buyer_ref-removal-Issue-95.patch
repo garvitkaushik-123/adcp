@@ -1,0 +1,55 @@
+From 4823aba18397bc1d96f5b408fcd46ede10a02dbc Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 22 Jun 2026 12:35:58 +0000
+Subject: [PATCH 2/2] test: regression guard for buyer_ref removal (Issue #950)
+
+buyer_ref appeared as a spurious non-spec field on CreateMediaBuySuccessResponse
+and UpdateMediaBuySuccessResponse in 5.7.0 and was removed before 6.0.
+
+Add four regression tests that assert buyer_ref is absent from both the public
+aliases (CreateMediaBuySuccessResponse, UpdateMediaBuySuccessResponse) and the
+underlying generated arms (CreateMediaBuyResponse1, UpdateMediaBuyResponse1),
+preventing future codegen runs from silently re-introducing the field.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+---
+ tests/test_create_media_buy_response_types.py | 46 +++++++++++++++++++
+ 1 file changed, 46 insertions(+)
+
+diff --git a/tests/test_create_media_buy_response_types.py b/tests/test_create_media_buy_response_types.py
+index 0542ac84..40628fe8 100644
+--- a/tests/test_create_media_buy_response_types.py
++++ b/tests/test_create_media_buy_response_types.py
+@@ -87,3 +87,49 @@ def test_handler_create_media_buy_return_type_is_union() -> None:
+     # so signatures carry strings — resolve to runtime objects.
+     hints = typing.get_type_hints(PlatformHandler.create_media_buy)
+     assert hints["return"] == CreateMediaBuyResponse
++
++
++# Issue #950 — buyer_ref is not a spec field on media-buy success responses
++
++
++def test_create_media_buy_success_response_no_buyer_ref() -> None:
++    """CreateMediaBuySuccessResponse must not expose buyer_ref."""
++    from adcp.types import CreateMediaBuySuccessResponse
++    assert "buyer_ref" not in CreateMediaBuySuccessResponse.model_fields
++
++
++def test_update_media_buy_success_response_no_buyer_ref() -> None:
++    """UpdateMediaBuySuccessResponse must not expose buyer_ref."""
++    from adcp.types import UpdateMediaBuySuccessResponse
++    assert "buyer_ref" not in UpdateMediaBuySuccessResponse.model_fields
++
++
++def test_create_media_buy_response1_no_buyer_ref() -> None:
++    """The underlying generated arm CreateMediaBuyResponse1 must not have buyer_ref."""
++    from adcp.types._generated import CreateMediaBuyResponse1
++    assert "buyer_ref" not in CreateMediaBuyResponse1.model_fields
++
++
++def test_update_media_buy_response1_no_buyer_ref() -> None:
++    """The underlying generated arm UpdateMediaBuyResponse1 must not have buyer_ref."""
++    from adcp.types._generated import UpdateMediaBuyResponse1
++    assert "buyer_ref" not in UpdateMediaBuyResponse1.model_fields
+-- 
+2.43.0
