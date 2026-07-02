@@ -1,0 +1,171 @@
+{
+  "version": 1,
+  "description": "Language-neutral test vectors for universal_macro_translation / encode_unreserved. All SDKs MUST pass these cases.",
+  "cases": [
+    {
+      "id": "basic-value-substitution",
+      "description": "A value-entry macro is encoded with encode_unreserved and placed in the URL.",
+      "pixel_url": "https://px.example.com/fire?mbid=${MEDIA_BUY_ID}&cb=${CACHEBUSTER}",
+      "mapping": {
+        "MEDIA_BUY_ID": {"value": "mb-001"},
+        "CACHEBUSTER":  {"value": "1700000000000"}
+      },
+      "expected": {
+        "url": "https://px.example.com/fire?mbid=mb-001&cb=1700000000000",
+        "dropped_params": [],
+        "unmapped_macros": []
+      }
+    },
+    {
+      "id": "native-passthrough",
+      "description": "A native-entry macro is inserted verbatim without any encoding.",
+      "pixel_url": "https://px.example.com/fire?clickurl=${CLICK_URL}",
+      "mapping": {
+        "CLICK_URL": {"native": "https%3A%2F%2Fadserver.example.com%2Fclick%3Fid%3D42"}
+      },
+      "expected": {
+        "url": "https://px.example.com/fire?clickurl=https%3A%2F%2Fadserver.example.com%2Fclick%3Fid%3D42",
+        "dropped_params": [],
+        "unmapped_macros": []
+      }
+    },
+    {
+      "id": "unmapped-macro-drops-param",
+      "description": "A macro present in the URL but absent from mapping causes the parameter to be dropped.",
+      "pixel_url": "https://px.example.com/fire?mbid=${MEDIA_BUY_ID}&unknown=${TMPX}",
+      "mapping": {
+        "MEDIA_BUY_ID": {"value": "mb-001"}
+      },
+      "expected": {
+        "url": "https://px.example.com/fire?mbid=mb-001",
+        "dropped_params": ["unknown"],
+        "unmapped_macros": ["TMPX"]
+      }
+    },
+    {
+      "id": "no-macro-passthrough",
+      "description": "Parameters with no macro placeholder are passed through unchanged.",
+      "pixel_url": "https://px.example.com/fire?static=value&encoded=hello%20world",
+      "mapping": {},
+      "expected": {
+        "url": "https://px.example.com/fire?static=value&encoded=hello%20world",
+        "dropped_params": [],
+        "unmapped_macros": []
+      }
+    },
+    {
+      "id": "mixed-substitution",
+      "description": "Mix of value substitution, native passthrough, unmapped drop, and passthrough.",
+      "pixel_url": "https://px.example.com/fire?cid=${CREATIVE_ID}&gdpr=${GDPR_CONSENT}&cb=${CACHEBUSTER}&sid=session42",
+      "mapping": {
+        "CREATIVE_ID":   {"value": "cr-99"},
+        "GDPR_CONSENT":  {"native": "CPzHq4APzHq4AAAAAA"}
+      },
+      "expected": {
+        "url": "https://px.example.com/fire?cid=cr-99&gdpr=CPzHq4APzHq4AAAAAA&sid=session42",
+        "dropped_params": ["cb"],
+        "unmapped_macros": ["CACHEBUSTER"]
+      }
+    },
+    {
+      "id": "encode-unreserved-special-chars",
+      "description": "Characters outside the RFC-3986 unreserved set are percent-encoded as uppercase %NN.",
+      "pixel_url": "https://px.example.com/fire?ua=${USER_AGENT}",
+      "mapping": {
+        "USER_AGENT": {"value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+      },
+      "expected": {
+        "url": "https://px.example.com/fire?ua=Mozilla%2F5.0%20%28Windows%20NT%2010.0%3B%20Win64%3B%20x64%29",
+        "dropped_params": [],
+        "unmapped_macros": []
+      }
+    },
+    {
+      "id": "url-value-fully-encoded",
+      "description": "A URL passed as a value entry is fully encoded — scheme, slashes, query chars all become %NN.",
+      "pixel_url": "https://px.example.com/fire?dest=${CLICK_URL}",
+      "mapping": {
+        "CLICK_URL": {"value": "https://destination.example.com/land?id=42&ref=adcp"}
+      },
+      "expected": {
+        "url": "https://px.example.com/fire?dest=https%3A%2F%2Fdestination.example.com%2Fland%3Fid%3D42%26ref%3Dadcp",
+        "dropped_params": [],
+        "unmapped_macros": []
+      }
+    },
+    {
+      "id": "empty-mapping-drops-all-macros",
+      "description": "An empty mapping causes every macro parameter to be dropped.",
+      "pixel_url": "https://px.example.com/fire?mbid=${MEDIA_BUY_ID}&cid=${CREATIVE_ID}&cb=${CACHEBUSTER}",
+      "mapping": {},
+      "expected": {
+        "url": "https://px.example.com/fire",
+        "dropped_params": ["mbid", "cid", "cb"],
+        "unmapped_macros": ["MEDIA_BUY_ID", "CREATIVE_ID", "CACHEBUSTER"]
+      }
+    },
+    {
+      "id": "same-macro-two-params-dedup",
+      "description": "If two parameters reference the same unmapped macro the macro appears once in unmapped_macros.",
+      "pixel_url": "https://px.example.com/fire?a=${CACHEBUSTER}&b=${CACHEBUSTER}",
+      "mapping": {},
+      "expected": {
+        "url": "https://px.example.com/fire",
+        "dropped_params": ["a", "b"],
+        "unmapped_macros": ["CACHEBUSTER"]
+      }
+    },
+    {
+      "id": "no-query-string",
+      "description": "A URL with no query string is returned unchanged.",
+      "pixel_url": "https://px.example.com/fire",
+      "mapping": {
+        "MEDIA_BUY_ID": {"value": "mb-001"}
+      },
+      "expected": {
+        "url": "https://px.example.com/fire",
+        "dropped_params": [],
+        "unmapped_macros": []
+      }
+    },
+    {
+      "id": "partial-macro-literal",
+      "description": "A macro token that does not span the entire value is treated as a literal and passed through.",
+      "pixel_url": "https://px.example.com/fire?tag=prefix_${CREATIVE_ID}_suffix",
+      "mapping": {
+        "CREATIVE_ID": {"value": "cr-99"}
+      },
+      "expected": {
+        "url": "https://px.example.com/fire?tag=prefix_${CREATIVE_ID}_suffix",
+        "dropped_params": [],
+        "unmapped_macros": []
+      }
+    },
+    {
+      "id": "utf8-value-encoding",
+      "description": "Non-ASCII characters in a value entry are UTF-8 encoded then percent-encoded.",
+      "pixel_url": "https://px.example.com/fire?city=${CITY}",
+      "mapping": {
+        "CITY": {"value": "São Paulo"}
+      },
+      "expected": {
+        "url": "https://px.example.com/fire?city=S%C3%A3o%20Paulo",
+        "dropped_params": [],
+        "unmapped_macros": []
+      }
+    },
+    {
+      "id": "encode-unreserved-tilde-preserved",
+      "description": "Tilde (~) is in the RFC-3986 unreserved set and MUST NOT be percent-encoded.",
+      "pixel_url": "https://px.example.com/fire?ver=${OS_VERSION}",
+      "mapping": {
+        "OS_VERSION": {"value": "14~beta"}
+      },
+      "expected": {
+        "url": "https://px.example.com/fire?ver=14~beta",
+        "dropped_params": [],
+        "unmapped_macros": []
+      }
+    }
+  ]
+}
