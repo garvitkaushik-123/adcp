@@ -76,16 +76,12 @@ class TestEncodeUnreserved:
 
     def test_uppercase_hex_in_output(self) -> None:
         """Percent-encoded escapes must use uppercase hex digits."""
-        # NUL is a single UTF-8 byte (0x00)
         assert encode_unreserved("\x00") == "%00"
-        # DEL is a single UTF-8 byte (0x7F)
         assert encode_unreserved("\x7f") == "%7F"
-        # U+00FF (ÿ) is two UTF-8 bytes: 0xC3 0xBF
         assert encode_unreserved("\xff") == "%C3%BF"
 
     def test_utf8_multibyte(self) -> None:
         """Non-ASCII characters are UTF-8 encoded then each byte percent-encoded."""
-        # ã = U+00E3, UTF-8 = 0xC3 0xA3
         assert encode_unreserved("ã") == "%C3%A3"
 
     def test_full_url_encoded(self) -> None:
@@ -103,8 +99,7 @@ class TestEncodeUnreserved:
 
     def test_curly_braces_encoded(self) -> None:
         """{ and } are not unreserved — they must be percent-encoded."""
-        result = encode_unreserved("${MACRO}")
-        assert result == "%24%7BMACRO%7D"
+        assert encode_unreserved("${MACRO}") == "%24%7BMACRO%7D"
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +147,6 @@ class TestUniversalMacroTranslation:
     def test_partial_macro_literal(self) -> None:
         url = "https://px.example.com/fire?tag=prefix_${CREATIVE_ID}_suffix"
         result = universal_macro_translation(url, {"CREATIVE_ID": {"value": "cr-99"}})
-        # Partial macro is not substituted — passes through unchanged.
         assert "prefix_${CREATIVE_ID}_suffix" in result.url
         assert result.dropped_params == []
         assert result.unmapped_macros == []
@@ -187,7 +181,6 @@ class TestUniversalMacroTranslation:
         assert "mbid=mb-enum" in result.url
 
     def test_string_and_enum_key_interchangeable(self) -> None:
-        """StrEnum equality means a string key finds an enum-keyed entry and vice versa."""
         url = "https://px.example.com/fire?cid=${CREATIVE_ID}"
         result_str = universal_macro_translation(url, {"CREATIVE_ID": {"value": "cr-1"}})
         result_enum = universal_macro_translation(
@@ -218,7 +211,6 @@ class TestUniversalMacroTranslation:
     def test_utf8_value_encoding(self) -> None:
         url = "https://px.example.com/fire?city=${CITY}"
         result = universal_macro_translation(url, {"CITY": {"value": "São Paulo"}})
-        # ã = U+00E3 → %C3%A3; space → %20
         assert "city=S%C3%A3o%20Paulo" in result.url
 
     def test_result_type(self) -> None:
@@ -229,7 +221,6 @@ class TestUniversalMacroTranslation:
         url = "https://px.example.com/fire?dest=${CLICK_URL}"
         dest = "https://destination.example.com/land?id=42&ref=adcp"
         result = universal_macro_translation(url, {"CLICK_URL": {"value": dest}})
-        # The destination URL must be fully encoded in the output query string.
         query = result.url.split("?", 1)[1]
         assert "dest=https%3A%2F%2Fdestination.example.com" in query
         assert "%" in query
