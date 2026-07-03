@@ -82,7 +82,7 @@
     },
     {
       "id": "url-value-fully-encoded",
-      "description": "A URL passed as a value entry is fully encoded — scheme, slashes, query chars all become %NN.",
+      "description": "A URL passed as a value entry is fully encoded.",
       "pixel_url": "https://px.example.com/fire?dest=${CLICK_URL}",
       "mapping": {
         "CLICK_URL": {"value": "https://destination.example.com/land?id=42&ref=adcp"}
